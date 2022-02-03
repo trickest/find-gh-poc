@@ -14,8 +14,8 @@ import (
 )
 
 type Repository struct {
-	Url         string
-	Description string
+	Url         string `json:"url"`
+	Description string `json:"description"`
 }
 
 var CVEQuery struct {
