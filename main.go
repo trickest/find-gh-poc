@@ -143,7 +143,6 @@ func main() {
 
 	getRepos(*query)
 
-	fmt.Println(len(repos))
 	if len(repos) > 0 {
 		data, _ := json.MarshalIndent(repos, "", "   ")
 
