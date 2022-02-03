@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/schollz/progressbar/v3"
 	"github.com/shurcooL/githubv4"
 )
 
@@ -70,12 +71,20 @@ func main() {
 		fmt.Println(err)
 	}
 
+	maxRepos := CVEQuery.Search.RepositoryCount
+	reposCnt := len(repos)
+	bar := progressbar.NewOptions(maxRepos,
+		progressbar.OptionSetDescription("Downloading results..."),
+		progressbar.OptionSetItsString("res"),
+		progressbar.OptionShowIts(),
+		progressbar.OptionShowCount(),
+		progressbar.OptionOnCompletion(func() { fmt.Println() }),
+	)
+
 	for _, nodeStruct := range CVEQuery.Search.Edges {
 		repos = append(repos, nodeStruct.Node.Repo)
 	}
-
-	maxRepos := CVEQuery.Search.RepositoryCount
-	reposCnt := len(repos)
+	_ = bar.Add(len(CVEQuery.Search.Edges))
 
 	variables = map[string]interface{}{
 		"query": githubv4.String(*query),
@@ -90,11 +99,13 @@ func main() {
 		}
 
 		if len(CVEPaginationQuery.Search.Edges) == 0 {
+			fmt.Println("\nLimit of 1000 results reached!")
 			break
 		}
 		for _, nodeStruct := range CVEPaginationQuery.Search.Edges {
 			repos = append(repos, nodeStruct.Node.Repo)
 		}
+		_ = bar.Add(len(CVEPaginationQuery.Search.Edges))
 
 		reposCnt = len(repos)
 		variables["after"] = CVEPaginationQuery.Search.PageInfo.EndCursor
