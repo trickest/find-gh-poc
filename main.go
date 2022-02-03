@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"golang.org/x/oauth2"
 	"io/ioutil"
+	"net/http"
 	"strings"
 	"time"
 
@@ -49,24 +50,16 @@ var CVEPaginationQuery struct {
 	} `graphql:"search(query: $query, type: REPOSITORY, first: 100, after: $after)"`
 }
 
-func main() {
-	token := flag.String("token", "", "Github token")
-	query := flag.String("query", "", "Query")
-	flag.Parse()
+var repos []Repository
+var httpClient *http.Client
+var githubV4Client *githubv4.Client
 
-	src := oauth2.StaticTokenSource(
-		&oauth2.Token{AccessToken: *token},
-	)
-	httpClient := oauth2.NewClient(context.Background(), src)
-
-	client := githubv4.NewClient(httpClient)
-
-	repos := make([]Repository, 0)
+func getRepos(query string) {
 	variables := map[string]interface{}{
-		"query": githubv4.String(*query),
+		"query": githubv4.String(query),
 	}
 
-	err := client.Query(context.Background(), &CVEQuery, variables)
+	err := githubV4Client.Query(context.Background(), &CVEQuery, variables)
 	if err != nil {
 		fmt.Println(err)
 	}
@@ -87,13 +80,13 @@ func main() {
 	_ = bar.Add(len(CVEQuery.Search.Edges))
 
 	variables = map[string]interface{}{
-		"query": githubv4.String(*query),
+		"query": githubv4.String(query),
 		"after": CVEQuery.Search.PageInfo.EndCursor,
 	}
 	for reposCnt < maxRepos {
 		time.Sleep(time.Second)
 
-		err = client.Query(context.Background(), &CVEPaginationQuery, variables)
+		err = githubV4Client.Query(context.Background(), &CVEPaginationQuery, variables)
 		if err != nil {
 			fmt.Println(err)
 		}
@@ -113,9 +106,23 @@ func main() {
 
 	data, _ := json.MarshalIndent(repos, "", "   ")
 
-	err = ioutil.WriteFile(strings.Trim(*query, "-*")+".json", data, 0644)
+	err = ioutil.WriteFile(strings.Trim(query, "-*")+".json", data, 0644)
 	if err != nil {
 		fmt.Println("Couldn't save data into a file!")
 	}
+}
 
+func main() {
+	token := flag.String("token", "", "Github token")
+	query := flag.String("query", "", "Query")
+	flag.Parse()
+
+	src := oauth2.StaticTokenSource(
+		&oauth2.Token{AccessToken: *token},
+	)
+	httpClient = oauth2.NewClient(context.Background(), src)
+	githubV4Client = githubv4.NewClient(httpClient)
+	repos = make([]Repository, 0)
+
+	getRepos(*query)
 }
