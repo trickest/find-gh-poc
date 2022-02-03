@@ -15,6 +15,30 @@ import (
 	"github.com/shurcooL/githubv4"
 )
 
+var illegalFileNameChars = [...]string{
+	"<",
+	">",
+	":",
+	"\"",
+	"/",
+	"\\",
+	"|",
+	"?",
+	"*",
+	" ",
+	"}",
+	"{",
+	"#",
+	"$",
+	"%",
+	"!",
+	"`",
+	"'",
+	"@",
+	"=",
+	"+",
+}
+
 type Repository struct {
 	Url         string `json:"url"`
 	Description string `json:"description"`
@@ -103,13 +127,6 @@ func getRepos(query string) {
 		reposCnt = len(repos)
 		variables["after"] = CVEPaginationQuery.Search.PageInfo.EndCursor
 	}
-
-	data, _ := json.MarshalIndent(repos, "", "   ")
-
-	err = ioutil.WriteFile(strings.Trim(query, "-*")+".json", data, 0644)
-	if err != nil {
-		fmt.Println("Couldn't save data into a file!")
-	}
 }
 
 func main() {
@@ -125,4 +142,21 @@ func main() {
 	repos = make([]Repository, 0)
 
 	getRepos(*query)
+
+	fmt.Println(len(repos))
+	if len(repos) > 0 {
+		data, _ := json.MarshalIndent(repos, "", "   ")
+
+		fileName := strings.Trim(*query, "-*")
+		for _, char := range illegalFileNameChars {
+			if strings.Contains(fileName, char) {
+				fileName = strings.ReplaceAll(fileName, char, "")
+			}
+		}
+
+		err := ioutil.WriteFile(fileName, data, 0644)
+		if err != nil {
+			fmt.Println("Couldn't save data into a file!")
+		}
+	}
 }
