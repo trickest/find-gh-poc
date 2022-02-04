@@ -8,6 +8,7 @@ import (
 	"golang.org/x/oauth2"
 	"io/ioutil"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -39,9 +40,19 @@ var illegalFileNameChars = [...]string{
 	"+",
 }
 
+const (
+	CVERegex = "(CVE(-|–)[0-9]{4}(-|–)[0-9]{4,})|(cve(-|–)[0-9]{4}(-|–)[0-9]{4,})"
+)
+
 type Repository struct {
 	Url         string `json:"url"`
 	Description string `json:"description"`
+}
+
+type RepositoryResult struct {
+	CVEIDs      []string `json:"cves,omitempty"`
+	Url         string   `json:"url"`
+	Description string   `json:"description"`
 }
 
 var CVEQuery struct {
@@ -75,6 +86,7 @@ var CVEPaginationQuery struct {
 }
 
 var repos []Repository
+var reposResults []RepositoryResult
 var httpClient *http.Client
 var githubV4Client *githubv4.Client
 
@@ -140,11 +152,42 @@ func main() {
 	httpClient = oauth2.NewClient(context.Background(), src)
 	githubV4Client = githubv4.NewClient(httpClient)
 	repos = make([]Repository, 0)
+	reposResults = make([]RepositoryResult, 0)
 
 	getRepos(*query)
 
 	if len(repos) > 0 {
-		data, _ := json.MarshalIndent(repos, "", "   ")
+		re := regexp.MustCompile(CVERegex)
+
+		for _, repo := range repos {
+			ids := make(map[string]bool, 0)
+
+			matches := re.FindAllStringSubmatch(repo.Url, -1)
+			matches = append(matches, re.FindAllStringSubmatch(repo.Description, -1)...)
+
+			for _, m := range matches {
+				if m != nil && len(m) > 0 {
+					if m[0] != "" {
+						ids[strings.ReplaceAll(m[0], "–", "-")] = true
+					}
+				}
+			}
+
+			repoRes := RepositoryResult{
+				Url:         repo.Url,
+				Description: repo.Description,
+			}
+			if len(ids) > 0 {
+				repoRes.CVEIDs = make([]string, 0)
+				for id := range ids {
+					repoRes.CVEIDs = append(repoRes.CVEIDs, id)
+				}
+			}
+
+			reposResults = append(reposResults, repoRes)
+		}
+
+		data, _ := json.MarshalIndent(reposResults, "", "   ")
 
 		fileName := strings.Trim(*query, "-*")
 		for _, char := range illegalFileNameChars {
