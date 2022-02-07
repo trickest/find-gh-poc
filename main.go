@@ -9,9 +9,11 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"path"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/schollz/progressbar/v3"
@@ -150,6 +152,15 @@ func main() {
 	query := flag.String("query", "", "GraphQL search query")
 	outputFolder := flag.String("o", "", "Output folder name")
 	flag.Parse()
+
+	go func() {
+		signalChannel := make(chan os.Signal, 1)
+		signal.Notify(signalChannel, os.Interrupt, syscall.SIGTERM, syscall.SIGKILL)
+		<-signalChannel
+
+		fmt.Println("\nProgram interrupted, exiting...")
+		os.Exit(0)
+	}()
 
 	if *token == "" || *outputFolder == "" || *query == "" {
 		fmt.Println("All flags must be specified!")
