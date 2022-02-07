@@ -6,10 +6,14 @@ import (
 	"flag"
 	"fmt"
 	"golang.org/x/oauth2"
-	"io/ioutil"
+	"io"
 	"net/http"
+	"os"
+	"os/signal"
+	"path"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/schollz/progressbar/v3"
@@ -89,6 +93,7 @@ var repos []Repository
 var reposResults []RepositoryResult
 var httpClient *http.Client
 var githubV4Client *githubv4.Client
+var reposPerCVE map[string][]string
 
 func getRepos(query string) {
 	variables := map[string]interface{}{
@@ -145,8 +150,23 @@ func getRepos(query string) {
 func main() {
 	token := flag.String("token", "", "Github token")
 	query := flag.String("query", "", "GraphQL search query")
-	outputFile := flag.String("o", "", "Output file name")
+	outputFolder := flag.String("o", "", "Output folder name")
+	silent := flag.Bool("silent", false, "Don't print JSON output to stdout")
 	flag.Parse()
+
+	go func() {
+		signalChannel := make(chan os.Signal, 1)
+		signal.Notify(signalChannel, os.Interrupt, syscall.SIGTERM, syscall.SIGKILL)
+		<-signalChannel
+
+		fmt.Println("\nProgram interrupted, exiting...")
+		os.Exit(0)
+	}()
+
+	if *token == "" || *outputFolder == "" || *query == "" {
+		fmt.Println("All flags must be specified!")
+		os.Exit(1)
+	}
 
 	src := oauth2.StaticTokenSource(
 		&oauth2.Token{AccessToken: *token},
@@ -155,6 +175,7 @@ func main() {
 	githubV4Client = githubv4.NewClient(httpClient)
 	repos = make([]Repository, 0)
 	reposResults = make([]RepositoryResult, 0)
+	reposPerCVE = make(map[string][]string)
 
 	getRepos(*query)
 
@@ -170,6 +191,7 @@ func main() {
 			for _, m := range matches {
 				if m != nil && len(m) > 0 {
 					if m[0] != "" {
+						m[0] = strings.ToUpper(m[0])
 						ids[strings.ReplaceAll(m[0], "–", "-")] = true
 					}
 				}
@@ -183,27 +205,46 @@ func main() {
 				repoRes.CVEIDs = make([]string, 0)
 				for id := range ids {
 					repoRes.CVEIDs = append(repoRes.CVEIDs, id)
+					reposPerCVE[id] = append(reposPerCVE[id], repo.Url)
 				}
 			}
 
 			reposResults = append(reposResults, repoRes)
 		}
 
-		data, _ := json.MarshalIndent(reposResults, "", "   ")
-
-		fileName := *outputFile
-		if fileName == "" {
-			fileName = strings.Trim(*query, "-*")
-			for _, char := range illegalFileNameChars {
-				if strings.Contains(fileName, char) {
-					fileName = strings.ReplaceAll(fileName, char, "")
-				}
+		for _, char := range illegalFileNameChars {
+			if strings.Contains(*outputFolder, char) {
+				*outputFolder = strings.ReplaceAll(*outputFolder, char, "")
+				fmt.Println("Illegal character ( " + char + " ) removed from folder name!")
 			}
 		}
 
-		err := ioutil.WriteFile(fileName, data, 0644)
-		if err != nil {
-			fmt.Println("Couldn't save data into a file!")
+		dirInfo, err := os.Stat(*outputFolder)
+		dirExists := !os.IsNotExist(err) && dirInfo.IsDir()
+
+		if !dirExists {
+			err = os.Mkdir(*outputFolder, 0755)
+			if err != nil {
+				fmt.Println("Couldn't create directory to store files!")
+				os.Exit(1)
+			}
+		}
+
+		for id, repoURLs := range reposPerCVE {
+			cveFile, err := os.Create(path.Join(*outputFolder, id+".txt"))
+			if err != nil {
+				fmt.Println("Couldn't create file for " + id + "!")
+				continue
+			}
+
+			for _, r := range repoURLs {
+				_, _ = io.WriteString(cveFile, r+"\n")
+			}
+		}
+
+		if !*silent {
+			data, _ := json.MarshalIndent(reposResults, "", "   ")
+			fmt.Println(string(data))
 		}
 	}
 }
