@@ -20,30 +20,6 @@ import (
 	"github.com/shurcooL/githubv4"
 )
 
-var illegalFileNameChars = [...]string{
-	"<",
-	">",
-	":",
-	"\"",
-	"/",
-	"\\",
-	"|",
-	"?",
-	"*",
-	" ",
-	"}",
-	"{",
-	"#",
-	"$",
-	"%",
-	"!",
-	"`",
-	"'",
-	"@",
-	"=",
-	"+",
-}
-
 const (
 	CVERegex = "(CVE(-|–)[0-9]{4}(-|–)[0-9]{4,})|(cve(-|–)[0-9]{4}(-|–)[0-9]{4,})"
 )
@@ -223,13 +199,6 @@ func main() {
 			}
 
 			reposResults = append(reposResults, repoRes)
-		}
-
-		for _, char := range illegalFileNameChars {
-			if strings.Contains(*outputFolder, char) {
-				*outputFolder = strings.ReplaceAll(*outputFolder, char, "")
-				fmt.Println("Illegal character ( " + char + " ) removed from folder name!")
-			}
 		}
 
 		dirInfo, err := os.Stat(*outputFolder)
