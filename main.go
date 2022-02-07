@@ -113,6 +113,7 @@ func getRepos(query string) {
 	for _, nodeStruct := range CVEQuery.Search.Edges {
 		repos = append(repos, nodeStruct.Node.Repo)
 	}
+	reposCnt = len(repos)
 	_ = bar.Add(len(CVEQuery.Search.Edges))
 
 	variables = map[string]interface{}{
