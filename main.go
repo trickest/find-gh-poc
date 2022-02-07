@@ -151,6 +151,7 @@ func main() {
 	token := flag.String("token", "", "Github token")
 	query := flag.String("query", "", "GraphQL search query")
 	outputFolder := flag.String("o", "", "Output folder name")
+	silent := flag.Bool("silent", false, "Don't print JSON output to stdout")
 	flag.Parse()
 
 	go func() {
@@ -236,7 +237,9 @@ func main() {
 			}
 		}
 
-		data, _ := json.MarshalIndent(reposResults, "", "   ")
-		fmt.Println(string(data))
+		if !*silent {
+			data, _ := json.MarshalIndent(reposResults, "", "   ")
+			fmt.Println(string(data))
+		}
 	}
 }
