@@ -218,8 +218,14 @@ func main() {
 			}
 		}
 
+		err := os.Mkdir(*outputFolder, 0755)
+		if err != nil {
+			fmt.Println("Couldn't create directory to store files!")
+			os.Exit(1)
+		}
+
 		for id, repoURLs := range reposPerCVE {
-			cveFile, err := os.Create(path.Join(*outputFolder, id))
+			cveFile, err := os.Create(path.Join(*outputFolder, id+".txt"))
 			if err != nil {
 				fmt.Println("Couldn't create file for " + id + "!")
 				continue
