@@ -76,7 +76,8 @@ var barInitialized = false
 
 func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 	querySplit := strings.Split(query, "created:")
-	query = querySplit[0] + " created:" + startingDate.Format(time.RFC3339) + ".." + endingDate.Format(time.RFC3339)
+	query = strings.Trim(querySplit[0], " ") + " created:" +
+		startingDate.Format(time.RFC3339) + ".." + endingDate.Format(time.RFC3339)
 	variables := map[string]interface{}{
 		"query": githubv4.String(query),
 	}
