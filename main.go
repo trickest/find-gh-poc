@@ -143,7 +143,8 @@ func getRepos(query string) {
 
 func main() {
 	token := flag.String("token", "", "Github token")
-	query := flag.String("query", "", "Query")
+	query := flag.String("query", "", "GraphQL search query")
+	outputFile := flag.String("o", "", "Output file name")
 	flag.Parse()
 
 	src := oauth2.StaticTokenSource(
@@ -189,10 +190,13 @@ func main() {
 
 		data, _ := json.MarshalIndent(reposResults, "", "   ")
 
-		fileName := strings.Trim(*query, "-*")
-		for _, char := range illegalFileNameChars {
-			if strings.Contains(fileName, char) {
-				fileName = strings.ReplaceAll(fileName, char, "")
+		fileName := *outputFile
+		if fileName == "" {
+			fileName = strings.Trim(*query, "-*")
+			for _, char := range illegalFileNameChars {
+				if strings.Contains(fileName, char) {
+					fileName = strings.ReplaceAll(fileName, char, "")
+				}
 			}
 		}
 
