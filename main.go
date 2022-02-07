@@ -219,10 +219,15 @@ func main() {
 			}
 		}
 
-		err := os.Mkdir(*outputFolder, 0755)
-		if err != nil {
-			fmt.Println("Couldn't create directory to store files!")
-			os.Exit(1)
+		dirInfo, err := os.Stat(*outputFolder)
+		dirExists := !os.IsNotExist(err) && dirInfo.IsDir()
+
+		if !dirExists {
+			err = os.Mkdir(*outputFolder, 0755)
+			if err != nil {
+				fmt.Println("Couldn't create directory to store files!")
+				os.Exit(1)
+			}
 		}
 
 		for id, repoURLs := range reposPerCVE {
