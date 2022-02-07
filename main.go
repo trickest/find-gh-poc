@@ -94,8 +94,13 @@ var reposResults []RepositoryResult
 var httpClient *http.Client
 var githubV4Client *githubv4.Client
 var reposPerCVE map[string][]string
+var githubCreateDate = time.Date(2008, 2, 8, 0, 0, 0, 0, time.UTC)
+var bar = &progressbar.ProgressBar{}
+var barInitialized = false
 
-func getRepos(query string) {
+func getRepos(query string, startingDate time.Time, endingDate time.Time) {
+	querySplit := strings.Split(query, "created:")
+	query = querySplit[0] + " created:" + startingDate.Format(time.RFC3339) + ".." + endingDate.Format(time.RFC3339)
 	variables := map[string]interface{}{
 		"query": githubv4.String(query),
 	}
@@ -106,20 +111,28 @@ func getRepos(query string) {
 	}
 
 	maxRepos := CVEQuery.Search.RepositoryCount
-	reposCnt := len(repos)
-	bar := progressbar.NewOptions(maxRepos,
-		progressbar.OptionSetDescription("Downloading results..."),
-		progressbar.OptionSetItsString("res"),
-		progressbar.OptionShowIts(),
-		progressbar.OptionShowCount(),
-		progressbar.OptionOnCompletion(func() { fmt.Println() }),
-	)
-
+	if !barInitialized {
+		bar = progressbar.NewOptions(maxRepos,
+			progressbar.OptionSetDescription("Downloading results..."),
+			progressbar.OptionSetItsString("res"),
+			progressbar.OptionShowIts(),
+			progressbar.OptionShowCount(),
+			progressbar.OptionOnCompletion(func() { fmt.Println() }),
+		)
+		barInitialized = true
+	}
+	if maxRepos >= 1000 {
+		dateDif := endingDate.Sub(startingDate) / 2
+		getRepos(query, startingDate, startingDate.Add(dateDif))
+		getRepos(query, startingDate.Add(dateDif), endingDate)
+		return
+	}
+	reposCnt := 0
 	for _, nodeStruct := range CVEQuery.Search.Edges {
 		repos = append(repos, nodeStruct.Node.Repo)
+		reposCnt++
 	}
-	reposCnt = len(repos)
-	_ = bar.Add(len(CVEQuery.Search.Edges))
+	_ = bar.Add(reposCnt)
 
 	variables = map[string]interface{}{
 		"query": githubv4.String(query),
@@ -139,10 +152,10 @@ func getRepos(query string) {
 		}
 		for _, nodeStruct := range CVEPaginationQuery.Search.Edges {
 			repos = append(repos, nodeStruct.Node.Repo)
+			reposCnt++
 		}
 		_ = bar.Add(len(CVEPaginationQuery.Search.Edges))
 
-		reposCnt = len(repos)
 		variables["after"] = CVEPaginationQuery.Search.PageInfo.EndCursor
 	}
 }
@@ -177,7 +190,7 @@ func main() {
 	reposResults = make([]RepositoryResult, 0)
 	reposPerCVE = make(map[string][]string)
 
-	getRepos(*query)
+	getRepos(*query, githubCreateDate, time.Now().UTC())
 
 	if len(repos) > 0 {
 		re := regexp.MustCompile(CVERegex)
