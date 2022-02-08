@@ -24,15 +24,34 @@ const (
 	CVERegex = "(CVE(-|–)[0-9]{4}(-|–)[0-9]{4,})|(cve(-|–)[0-9]{4}(-|–)[0-9]{4,})"
 )
 
+var ReadmeQuery struct {
+	Repository struct {
+		Object struct {
+			Blob struct {
+				Text string
+			} `graphql:"... on Blob"`
+		} `graphql:"object(expression: \"HEAD:README.md\")"`
+	} `graphql:"repository(owner: $owner, name: $name)"`
+}
+
 type Repository struct {
-	Url         string `json:"url"`
-	Description string `json:"description"`
+	Url              string `json:"url"`
+	Description      string `json:"description"`
+	RepositoryTopics struct {
+		Nodes []struct {
+			Topic struct {
+				Name string
+			}
+		}
+	} `graphql:"repositoryTopics(first: 100)"`
 }
 
 type RepositoryResult struct {
 	CVEIDs      []string `json:"cves,omitempty"`
 	Url         string   `json:"url"`
 	Description string   `json:"description"`
+	Topics      []string `json:"topics,omitempty"`
+	Readme      *string  `json:"readme,omitempty"`
 }
 
 var CVEQuery struct {
@@ -65,14 +84,34 @@ var CVEPaginationQuery struct {
 	} `graphql:"search(query: $query, type: REPOSITORY, first: 100, after: $after)"`
 }
 
-var repos []Repository
-var reposResults []RepositoryResult
-var httpClient *http.Client
-var githubV4Client *githubv4.Client
-var reposPerCVE map[string][]string
-var githubCreateDate = time.Date(2008, 2, 8, 0, 0, 0, 0, time.UTC)
-var bar = &progressbar.ProgressBar{}
-var barInitialized = false
+var (
+	reposResults     []RepositoryResult
+	httpClient       *http.Client
+	githubV4Client   *githubv4.Client
+	reposPerCVE      map[string][]string
+	githubCreateDate = time.Date(2008, 2, 8, 0, 0, 0, 0, time.UTC)
+	bar              = &progressbar.ProgressBar{}
+	barInitialized   = false
+)
+
+func getReadme(repoUrl string) string {
+	urlSplit := strings.Split(repoUrl, "/")
+	if len(urlSplit) == 5 {
+		variables := map[string]interface{}{
+			"owner": githubv4.String(strings.Trim(urlSplit[len(urlSplit)-2], " ")),
+			"name":  githubv4.String(strings.Trim(urlSplit[len(urlSplit)-1], " ")),
+		}
+
+		err := githubV4Client.Query(context.Background(), &ReadmeQuery, variables)
+		if err != nil {
+			fmt.Println(err)
+			return ""
+		}
+		return ReadmeQuery.Repository.Object.Blob.Text
+	} else {
+		return ""
+	}
+}
 
 func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 	querySplit := strings.Split(query, "created:")
@@ -85,6 +124,7 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 	err := githubV4Client.Query(context.Background(), &CVEQuery, variables)
 	if err != nil {
 		fmt.Println(err)
+		return
 	}
 
 	maxRepos := CVEQuery.Search.RepositoryCount
@@ -106,10 +146,21 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 	}
 	reposCnt := 0
 	for _, nodeStruct := range CVEQuery.Search.Edges {
-		repos = append(repos, nodeStruct.Node.Repo)
+		var topics = make([]string, 0)
+		for _, node := range nodeStruct.Node.Repo.RepositoryTopics.Nodes {
+			topics = append(topics, node.Topic.Name)
+		}
+		readme := getReadme(nodeStruct.Node.Repo.Url)
+
+		reposResults = append(reposResults, RepositoryResult{
+			Url:         nodeStruct.Node.Repo.Url,
+			Description: nodeStruct.Node.Repo.Description,
+			Topics:      topics,
+			Readme:      &readme,
+		})
 		reposCnt++
+		_ = bar.Add(1)
 	}
-	_ = bar.Add(reposCnt)
 
 	variables = map[string]interface{}{
 		"query": githubv4.String(query),
@@ -128,10 +179,21 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 			break
 		}
 		for _, nodeStruct := range CVEPaginationQuery.Search.Edges {
-			repos = append(repos, nodeStruct.Node.Repo)
+			var topics = make([]string, 0)
+			for _, node := range nodeStruct.Node.Repo.RepositoryTopics.Nodes {
+				topics = append(topics, node.Topic.Name)
+			}
+			readme := getReadme(nodeStruct.Node.Repo.Url)
+
+			reposResults = append(reposResults, RepositoryResult{
+				Url:         nodeStruct.Node.Repo.Url,
+				Description: nodeStruct.Node.Repo.Description,
+				Topics:      topics,
+				Readme:      &readme,
+			})
 			reposCnt++
+			_ = bar.Add(1)
 		}
-		_ = bar.Add(len(CVEPaginationQuery.Search.Edges))
 
 		variables["after"] = CVEPaginationQuery.Search.PageInfo.EndCursor
 	}
@@ -163,20 +225,23 @@ func main() {
 	)
 	httpClient = oauth2.NewClient(context.Background(), src)
 	githubV4Client = githubv4.NewClient(httpClient)
-	repos = make([]Repository, 0)
 	reposResults = make([]RepositoryResult, 0)
 	reposPerCVE = make(map[string][]string)
 
 	getRepos(*query, githubCreateDate, time.Now().UTC())
 
-	if len(repos) > 0 {
+	if len(reposResults) > 0 {
 		re := regexp.MustCompile(CVERegex)
 
-		for _, repo := range repos {
+		for i, repo := range reposResults {
 			ids := make(map[string]bool, 0)
 
 			matches := re.FindAllStringSubmatch(repo.Url, -1)
 			matches = append(matches, re.FindAllStringSubmatch(repo.Description, -1)...)
+			matches = append(matches, re.FindAllStringSubmatch(*repo.Readme, -1)...)
+			for _, topic := range repo.Topics {
+				matches = append(matches, re.FindAllStringSubmatch(topic, -1)...)
+			}
 
 			for _, m := range matches {
 				if m != nil && len(m) > 0 {
@@ -187,19 +252,16 @@ func main() {
 				}
 			}
 
-			repoRes := RepositoryResult{
-				Url:         repo.Url,
-				Description: repo.Description,
-			}
 			if len(ids) > 0 {
-				repoRes.CVEIDs = make([]string, 0)
+				reposResults[i].CVEIDs = make([]string, 0)
 				for id := range ids {
-					repoRes.CVEIDs = append(repoRes.CVEIDs, id)
+					reposResults[i].CVEIDs = append(reposResults[i].CVEIDs, id)
 					reposPerCVE[id] = append(reposPerCVE[id], repo.Url)
 				}
 			}
 
-			reposResults = append(reposResults, repoRes)
+			reposResults[i].Readme = nil
+			reposResults[i].Topics = nil
 		}
 
 		dirInfo, err := os.Stat(*outputFolder)
