@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"golang.org/x/oauth2"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"os/signal"
@@ -201,7 +202,8 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 
 func main() {
 	token := flag.String("token", "", "Github token")
-	query := flag.String("query", "", "GraphQL search query")
+	query := flag.String("query-string", "", "GraphQL search query")
+	queryFile := flag.String("query-file", "", "File to read GraphQL search query from")
 	outputFolder := flag.String("o", "", "Output folder name")
 	silent := flag.Bool("silent", false, "Don't print JSON output to stdout")
 	flag.Parse()
@@ -215,8 +217,13 @@ func main() {
 		os.Exit(0)
 	}()
 
-	if *token == "" || *outputFolder == "" || *query == "" {
-		fmt.Println("All flags must be specified!")
+	if *token == "" || *outputFolder == "" {
+		fmt.Println("Token and output folder must be specified!")
+		os.Exit(1)
+	}
+
+	if *query == "" && *queryFile == "" {
+		fmt.Println("Query must be specified!")
 		os.Exit(1)
 	}
 
@@ -228,7 +235,24 @@ func main() {
 	reposResults = make([]RepositoryResult, 0)
 	reposPerCVE = make(map[string][]string)
 
-	getRepos(*query, githubCreateDate, time.Now().UTC())
+	searchQuery := *query
+	if searchQuery == "" {
+		file, err := os.Open(*queryFile)
+		if err != nil {
+			fmt.Println("Couldn't open file to read query!")
+			os.Exit(1)
+		}
+
+		queryData, err := ioutil.ReadAll(file)
+		if err != nil {
+			fmt.Println("Couldn't read from query file!")
+			os.Exit(1)
+		}
+
+		searchQuery = strings.Trim(string(queryData), " \n\r\t")
+	}
+
+	getRepos(searchQuery, githubCreateDate, time.Now().UTC())
 
 	if len(reposResults) > 0 {
 		re := regexp.MustCompile(CVERegex)
