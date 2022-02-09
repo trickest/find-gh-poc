@@ -242,6 +242,7 @@ func main() {
 			fmt.Println("Couldn't open file to read query!")
 			os.Exit(1)
 		}
+		defer file.Close()
 
 		queryData, err := ioutil.ReadAll(file)
 		if err != nil {
