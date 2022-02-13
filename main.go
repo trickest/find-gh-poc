@@ -181,7 +181,6 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 		}
 
 		if len(CVEPaginationQuery.Search.Edges) == 0 {
-			fmt.Println("\nLimit of 1000 results reached!")
 			break
 		}
 		for _, nodeStruct := range CVEPaginationQuery.Search.Edges {
