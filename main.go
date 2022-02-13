@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"golang.org/x/oauth2"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -17,12 +16,14 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/oauth2"
+
 	"github.com/schollz/progressbar/v3"
 	"github.com/shurcooL/githubv4"
 )
 
 const (
-	CVERegex = "(CVE(-|–)[0-9]{4}(-|–)[0-9]{4,})|(cve(-|–)[0-9]{4}(-|–)[0-9]{4,})"
+	CVERegex = "(?i)cve[-–_][0-9]{4}[-–_][0-9]{4,}"
 )
 
 var ReadmeQuery struct {
@@ -36,8 +37,9 @@ var ReadmeQuery struct {
 }
 
 type Repository struct {
-	Url              string `json:"url"`
-	Description      string `json:"description"`
+	Url              string
+	Description      string
+	IsEmpty          bool
 	RepositoryTopics struct {
 		Nodes []struct {
 			Topic struct {
@@ -96,6 +98,7 @@ var (
 )
 
 func getReadme(repoUrl string) string {
+	ReadmeQuery.Repository.Object.Blob.Text = ""
 	urlSplit := strings.Split(repoUrl, "/")
 	if len(urlSplit) == 5 {
 		variables := map[string]interface{}{
@@ -147,6 +150,9 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 	}
 	reposCnt := 0
 	for _, nodeStruct := range CVEQuery.Search.Edges {
+		if nodeStruct.Node.Repo.IsEmpty {
+			continue
+		}
 		var topics = make([]string, 0)
 		for _, node := range nodeStruct.Node.Repo.RepositoryTopics.Nodes {
 			topics = append(topics, node.Topic.Name)
@@ -176,10 +182,12 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 		}
 
 		if len(CVEPaginationQuery.Search.Edges) == 0 {
-			fmt.Println("\nLimit of 1000 results reached!")
 			break
 		}
 		for _, nodeStruct := range CVEPaginationQuery.Search.Edges {
+			if nodeStruct.Node.Repo.IsEmpty {
+				continue
+			}
 			var topics = make([]string, 0)
 			for _, node := range nodeStruct.Node.Repo.RepositoryTopics.Nodes {
 				topics = append(topics, node.Topic.Name)
@@ -253,6 +261,7 @@ func main() {
 		searchQuery = strings.Trim(string(queryData), " \n\r\t")
 	}
 
+	searchQuery += " in:readme in:description in:name"
 	getRepos(searchQuery, githubCreateDate, time.Now().UTC())
 
 	if len(reposResults) > 0 {
