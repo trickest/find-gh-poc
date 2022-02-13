@@ -261,6 +261,7 @@ func main() {
 		searchQuery = strings.Trim(string(queryData), " \n\r\t")
 	}
 
+	searchQuery += " in:readme in:description in:name"
 	getRepos(searchQuery, githubCreateDate, time.Now().UTC())
 
 	if len(reposResults) > 0 {
