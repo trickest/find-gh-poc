@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"golang.org/x/oauth2"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -17,12 +16,14 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/oauth2"
+
 	"github.com/schollz/progressbar/v3"
 	"github.com/shurcooL/githubv4"
 )
 
 const (
-	CVERegex = "(?i)cve[-–][0-9]{4}[-–][0-9]{4,}"
+	CVERegex = "(?i)cve[-–_][0-9]{4}[-–_][0-9]{4,}"
 )
 
 var ReadmeQuery struct {
