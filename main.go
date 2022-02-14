@@ -281,6 +281,7 @@ func main() {
 				if m != nil && len(m) > 0 {
 					if m[0] != "" {
 						m[0] = strings.ToUpper(m[0])
+						m[0] = strings.ReplaceAll(m[0], "_", "-")
 						ids[strings.ReplaceAll(m[0], "–", "-")] = true
 					}
 				}
