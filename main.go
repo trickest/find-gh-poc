@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path"
 	"regexp"
 	"strings"
 	"syscall"
@@ -212,7 +211,7 @@ func main() {
 	token := flag.String("token", "", "Github token")
 	query := flag.String("query-string", "", "GraphQL search query")
 	queryFile := flag.String("query-file", "", "File to read GraphQL search query from")
-	outputFolder := flag.String("o", "", "Output folder name")
+	outputFile := flag.String("o", "", "Output file name")
 	silent := flag.Bool("silent", false, "Don't print JSON output to stdout")
 	flag.Parse()
 
@@ -225,8 +224,8 @@ func main() {
 		os.Exit(0)
 	}()
 
-	if *token == "" || *outputFolder == "" {
-		fmt.Println("Token and output folder must be specified!")
+	if *token == "" || *outputFile == "" {
+		fmt.Println("Token and output file must be specified!")
 		os.Exit(1)
 	}
 
@@ -299,26 +298,15 @@ func main() {
 			reposResults[i].Topics = nil
 		}
 
-		dirInfo, err := os.Stat(*outputFolder)
-		dirExists := !os.IsNotExist(err) && dirInfo.IsDir()
-
-		if !dirExists {
-			err = os.Mkdir(*outputFolder, 0755)
-			if err != nil {
-				fmt.Println("Couldn't create directory to store files!")
-				os.Exit(1)
-			}
+		output, err := os.Create(*outputFile)
+		if err != nil {
+			fmt.Println("Couldn't create output file")
 		}
+		defer output.Close()
 
 		for id, repoURLs := range reposPerCVE {
-			cveFile, err := os.Create(path.Join(*outputFolder, id+".txt"))
-			if err != nil {
-				fmt.Println("Couldn't create file for " + id + "!")
-				continue
-			}
-
 			for _, r := range repoURLs {
-				_, _ = io.WriteString(cveFile, r+"\n")
+				_, _ = io.WriteString(output, id+" - "+r+"\n")
 			}
 		}
 
