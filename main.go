@@ -208,7 +208,8 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 }
 
 func main() {
-	token := flag.String("token", "", "Github token")
+	token := flag.String("token-string", "", "Github token")
+	tokenFile := flag.String("token-file", "", "File to read Github token from")
 	query := flag.String("query-string", "", "GraphQL search query")
 	queryFile := flag.String("query-file", "", "File to read GraphQL search query from")
 	outputFile := flag.String("o", "", "Output file name")
@@ -224,7 +225,7 @@ func main() {
 		os.Exit(0)
 	}()
 
-	if *token == "" || *outputFile == "" {
+	if (*token == "" && *tokenFile == "") || *outputFile == "" {
 		fmt.Println("Token and output file must be specified!")
 		os.Exit(1)
 	}
@@ -233,9 +234,28 @@ func main() {
 		fmt.Println("Query must be specified!")
 		os.Exit(1)
 	}
+	githubToken := ""
+	if *tokenFile != "" {
+		file, err := os.Open(*tokenFile)
+		if err != nil {
+			fmt.Println("Couldn't open file to read token!")
+			os.Exit(1)
+		}
+		defer file.Close()
+
+		tokenData, err := ioutil.ReadAll(file)
+		if err != nil {
+			fmt.Println("Couldn't read from token file!")
+			os.Exit(1)
+		}
+
+		githubToken = string(tokenData)
+	} else {
+		githubToken = *token
+	}
 
 	src := oauth2.StaticTokenSource(
-		&oauth2.Token{AccessToken: *token},
+		&oauth2.Token{AccessToken: githubToken},
 	)
 	httpClient = oauth2.NewClient(context.Background(), src)
 	githubV4Client = githubv4.NewClient(httpClient)
