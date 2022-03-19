@@ -172,6 +172,7 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 					remainingRequests := remainingRepos + remainingRepos/100 + 1
 					if remainingRequests < rateLimit.Remaining {
 						requestDelay = 0
+						delayMutex.Unlock()
 						break
 					} else {
 						untilNextReset := rateLimit.ResetAt.Sub(time.Now()).Milliseconds()
