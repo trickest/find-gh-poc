@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -25,14 +26,11 @@ const (
 	CVERegex = "(?i)cve[-–_][0-9]{4}[-–_][0-9]{4,}"
 )
 
-var ReadmeQuery struct {
-	Repository struct {
-		Object struct {
-			Blob struct {
-				Text string
-			} `graphql:"... on Blob"`
-		} `graphql:"object(expression: \"HEAD:README.md\")"`
-	} `graphql:"repository(owner: $owner, name: $name)"`
+type RateLimit struct {
+	Limit     int
+	Remaining int
+	Cost      int
+	ResetAt   time.Time
 }
 
 type Repository struct {
@@ -56,8 +54,20 @@ type RepositoryResult struct {
 	Readme      *string  `json:"readme,omitempty"`
 }
 
+var ReadmeQuery struct {
+	RateLimit  RateLimit `graphql:"rateLimit"`
+	Repository struct {
+		Object struct {
+			Blob struct {
+				Text string
+			} `graphql:"... on Blob"`
+		} `graphql:"object(expression: \"HEAD:README.md\")"`
+	} `graphql:"repository(owner: $owner, name: $name)"`
+}
+
 var CVEQuery struct {
-	Search struct {
+	RateLimit RateLimit `graphql:"rateLimit"`
+	Search    struct {
 		RepositoryCount int
 		PageInfo        struct {
 			EndCursor   githubv4.String
@@ -72,7 +82,8 @@ var CVEQuery struct {
 }
 
 var CVEPaginationQuery struct {
-	Search struct {
+	RateLimit RateLimit `graphql:"rateLimit"`
+	Search    struct {
 		RepositoryCount int
 		PageInfo        struct {
 			EndCursor   githubv4.String
@@ -94,6 +105,10 @@ var (
 	githubCreateDate = time.Date(2008, 2, 8, 0, 0, 0, 0, time.UTC)
 	bar              = &progressbar.ProgressBar{}
 	barInitialized   = false
+	requestDelay     int
+	adjustDelay      bool
+	rateLimit        *RateLimit
+	delayMutex       = &sync.Mutex{}
 )
 
 func getReadme(repoUrl string) string {
@@ -110,6 +125,11 @@ func getReadme(repoUrl string) string {
 			fmt.Println(err)
 			return ""
 		}
+		delayMutex.Lock()
+		rateLimit = &ReadmeQuery.RateLimit
+		time.Sleep(time.Millisecond * time.Duration(requestDelay*rateLimit.Cost))
+		delayMutex.Unlock()
+
 		return ReadmeQuery.Repository.Object.Blob.Text
 	} else {
 		return ""
@@ -129,6 +149,10 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 		fmt.Println(err)
 		return
 	}
+	delayMutex.Lock()
+	rateLimit = &CVEQuery.RateLimit
+	time.Sleep(time.Millisecond * time.Duration(requestDelay*rateLimit.Cost))
+	delayMutex.Unlock()
 
 	maxRepos := CVEQuery.Search.RepositoryCount
 	if !barInitialized {
@@ -140,6 +164,27 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 			progressbar.OptionOnCompletion(func() { fmt.Println() }),
 		)
 		barInitialized = true
+		if adjustDelay {
+			go func() {
+				for {
+					delayMutex.Lock()
+					remainingRepos := bar.GetMax() - len(reposResults)
+					remainingRequests := remainingRepos + remainingRepos/100 + 1
+					if remainingRequests < rateLimit.Remaining {
+						requestDelay = 0
+						break
+					} else {
+						untilNextReset := rateLimit.ResetAt.Sub(time.Now()).Milliseconds()
+						if untilNextReset < 0 {
+							untilNextReset = time.Hour.Milliseconds()
+						}
+						requestDelay = int(untilNextReset)/rateLimit.Remaining + 1
+					}
+					delayMutex.Unlock()
+					time.Sleep(time.Second)
+				}
+			}()
+		}
 	}
 	if maxRepos >= 1000 {
 		dateDif := endingDate.Sub(startingDate) / 2
@@ -173,12 +218,14 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 		"after": CVEQuery.Search.PageInfo.EndCursor,
 	}
 	for reposCnt < maxRepos {
-		time.Sleep(time.Second)
-
 		err = githubV4Client.Query(context.Background(), &CVEPaginationQuery, variables)
 		if err != nil {
 			fmt.Println(err)
 		}
+		delayMutex.Lock()
+		rateLimit = &CVEPaginationQuery.RateLimit
+		time.Sleep(time.Millisecond * time.Duration(requestDelay*rateLimit.Cost))
+		delayMutex.Unlock()
 
 		if len(CVEPaginationQuery.Search.Edges) == 0 {
 			break
@@ -214,6 +261,8 @@ func main() {
 	queryFile := flag.String("query-file", "", "File to read GraphQL search query from")
 	outputFile := flag.String("o", "", "Output file name")
 	silent := flag.Bool("silent", false, "Don't print JSON output to stdout")
+	flag.IntVar(&requestDelay, "delay", 0, "Time delay after every GraphQL request [ms]")
+	flag.BoolVar(&adjustDelay, "adjust-delay", false, "Automatically adjust time delay between requests")
 	flag.Parse()
 
 	go func() {
