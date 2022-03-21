@@ -109,6 +109,8 @@ var (
 	adjustDelay      bool
 	rateLimit        *RateLimit
 	delayMutex       = &sync.Mutex{}
+	outputFile       string
+	silent           bool
 )
 
 func getReadme(repoUrl string) string {
@@ -122,8 +124,8 @@ func getReadme(repoUrl string) string {
 
 		err := githubV4Client.Query(context.Background(), &ReadmeQuery, variables)
 		if err != nil {
-			fmt.Println(err)
-			return ""
+			rateLimit = &ReadmeQuery.RateLimit
+			handleGraphQLAPIError(err)
 		}
 		delayMutex.Lock()
 		rateLimit = &ReadmeQuery.RateLimit
@@ -146,8 +148,8 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 
 	err := githubV4Client.Query(context.Background(), &CVEQuery, variables)
 	if err != nil {
-		fmt.Println(err)
-		return
+		rateLimit = &CVEQuery.RateLimit
+		handleGraphQLAPIError(err)
 	}
 	delayMutex.Lock()
 	rateLimit = &CVEQuery.RateLimit
@@ -179,10 +181,14 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 						if untilNextReset < 0 {
 							untilNextReset = time.Hour.Milliseconds()
 						}
+						if rateLimit.Remaining == 0 {
+							writeOutput(outputFile, silent)
+							fmt.Println("Rate limit exceeded!\nNext reset at " + rateLimit.ResetAt.Format(time.RFC1123))
+							os.Exit(0)
+						}
 						requestDelay = int(untilNextReset)/rateLimit.Remaining + 1
 					}
 					delayMutex.Unlock()
-					time.Sleep(time.Second)
 				}
 			}()
 		}
@@ -221,7 +227,8 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 	for reposCnt < maxRepos {
 		err = githubV4Client.Query(context.Background(), &CVEPaginationQuery, variables)
 		if err != nil {
-			fmt.Println(err)
+			rateLimit = &CVEPaginationQuery.RateLimit
+			handleGraphQLAPIError(err)
 		}
 		delayMutex.Lock()
 		rateLimit = &CVEPaginationQuery.RateLimit
@@ -255,13 +262,45 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 	}
 }
 
+func handleGraphQLAPIError(err error) {
+	writeOutput(outputFile, silent)
+	fmt.Println(err)
+	if strings.Contains(err.Error(), "limit exceeded") {
+		fmt.Println("Next reset at " + rateLimit.ResetAt.Format(time.RFC1123))
+	}
+	os.Exit(0)
+}
+
+func writeOutput(fileName string, silent bool) {
+	if len(reposResults) == 0 {
+		return
+	}
+	output, err := os.Create(fileName)
+	if err != nil {
+		fmt.Println(err)
+		fmt.Println("Couldn't create output file")
+	}
+	defer output.Close()
+
+	for id, repoURLs := range reposPerCVE {
+		for _, r := range repoURLs {
+			_, _ = io.WriteString(output, id+" - "+r+"\n")
+		}
+	}
+
+	if !silent {
+		data, _ := json.MarshalIndent(reposResults, "", "   ")
+		fmt.Println(string(data))
+	}
+}
+
 func main() {
 	token := flag.String("token-string", "", "Github token")
 	tokenFile := flag.String("token-file", "", "File to read Github token from")
 	query := flag.String("query-string", "", "GraphQL search query")
 	queryFile := flag.String("query-file", "", "File to read GraphQL search query from")
-	outputFile := flag.String("o", "", "Output file name")
-	silent := flag.Bool("silent", false, "Don't print JSON output to stdout")
+	flag.StringVar(&outputFile, "o", "", "Output file name")
+	flag.BoolVar(&silent, "silent", false, "Don't print JSON output to stdout")
 	flag.IntVar(&requestDelay, "delay", 0, "Time delay after every GraphQL request [ms]")
 	flag.BoolVar(&adjustDelay, "adjust-delay", false, "Automatically adjust time delay between requests")
 	flag.Parse()
@@ -275,7 +314,7 @@ func main() {
 		os.Exit(0)
 	}()
 
-	if (*token == "" && *tokenFile == "") || *outputFile == "" {
+	if (*token == "" && *tokenFile == "") || outputFile == "" {
 		fmt.Println("Token and output file must be specified!")
 		os.Exit(1)
 	}
@@ -368,21 +407,6 @@ func main() {
 			reposResults[i].Topics = nil
 		}
 
-		output, err := os.Create(*outputFile)
-		if err != nil {
-			fmt.Println("Couldn't create output file")
-		}
-		defer output.Close()
-
-		for id, repoURLs := range reposPerCVE {
-			for _, r := range repoURLs {
-				_, _ = io.WriteString(output, id+" - "+r+"\n")
-			}
-		}
-
-		if !*silent {
-			data, _ := json.MarshalIndent(reposResults, "", "   ")
-			fmt.Println(string(data))
-		}
+		writeOutput(outputFile, silent)
 	}
 }
