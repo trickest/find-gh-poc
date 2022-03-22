@@ -263,6 +263,7 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 }
 
 func handleGraphQLAPIError(err error) {
+	processResults()
 	writeOutput(outputFile, silent)
 	fmt.Println(err)
 	if strings.Contains(err.Error(), "limit exceeded") {
@@ -291,6 +292,45 @@ func writeOutput(fileName string, silent bool) {
 	if !silent {
 		data, _ := json.MarshalIndent(reposResults, "", "   ")
 		fmt.Println(string(data))
+	}
+}
+
+func processResults() {
+	if len(reposResults) == 0 {
+		return
+	}
+	re := regexp.MustCompile(CVERegex)
+
+	for i, repo := range reposResults {
+		ids := make(map[string]bool, 0)
+
+		matches := re.FindAllStringSubmatch(repo.Url, -1)
+		matches = append(matches, re.FindAllStringSubmatch(repo.Description, -1)...)
+		matches = append(matches, re.FindAllStringSubmatch(*repo.Readme, -1)...)
+		for _, topic := range repo.Topics {
+			matches = append(matches, re.FindAllStringSubmatch(topic, -1)...)
+		}
+
+		for _, m := range matches {
+			if m != nil && len(m) > 0 {
+				if m[0] != "" {
+					m[0] = strings.ToUpper(m[0])
+					m[0] = strings.ReplaceAll(m[0], "_", "-")
+					ids[strings.ReplaceAll(m[0], "–", "-")] = true
+				}
+			}
+		}
+
+		if len(ids) > 0 {
+			reposResults[i].CVEIDs = make([]string, 0)
+			for id := range ids {
+				reposResults[i].CVEIDs = append(reposResults[i].CVEIDs, id)
+				reposPerCVE[id] = append(reposPerCVE[id], repo.Url)
+			}
+		}
+
+		reposResults[i].Readme = nil
+		reposResults[i].Topics = nil
 	}
 }
 
@@ -372,41 +412,7 @@ func main() {
 	searchQuery += " in:readme in:description in:name"
 	getRepos(searchQuery, githubCreateDate, time.Now().UTC())
 
-	if len(reposResults) > 0 {
-		re := regexp.MustCompile(CVERegex)
+	processResults()
+	writeOutput(outputFile, silent)
 
-		for i, repo := range reposResults {
-			ids := make(map[string]bool, 0)
-
-			matches := re.FindAllStringSubmatch(repo.Url, -1)
-			matches = append(matches, re.FindAllStringSubmatch(repo.Description, -1)...)
-			matches = append(matches, re.FindAllStringSubmatch(*repo.Readme, -1)...)
-			for _, topic := range repo.Topics {
-				matches = append(matches, re.FindAllStringSubmatch(topic, -1)...)
-			}
-
-			for _, m := range matches {
-				if m != nil && len(m) > 0 {
-					if m[0] != "" {
-						m[0] = strings.ToUpper(m[0])
-						m[0] = strings.ReplaceAll(m[0], "_", "-")
-						ids[strings.ReplaceAll(m[0], "–", "-")] = true
-					}
-				}
-			}
-
-			if len(ids) > 0 {
-				reposResults[i].CVEIDs = make([]string, 0)
-				for id := range ids {
-					reposResults[i].CVEIDs = append(reposResults[i].CVEIDs, id)
-					reposPerCVE[id] = append(reposPerCVE[id], repo.Url)
-				}
-			}
-
-			reposResults[i].Readme = nil
-			reposResults[i].Topics = nil
-		}
-
-		writeOutput(outputFile, silent)
-	}
 }
