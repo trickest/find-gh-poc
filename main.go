@@ -109,16 +109,17 @@ func getReadme(repoUrl string) string {
 	errHandle:
 		start := time.Now()
 		err := githubV4Client.Query(context.Background(), &ReadmeQuery, variables)
-		duration := time.Since(start)
+		duration := time.Since(start).Milliseconds() - int64(3*time.Millisecond)
 		if err != nil {
+			delayMutex.Lock()
 			rateLimit = &ReadmeQuery.RateLimit
 			handleGraphQLAPIError(err)
-			time.Sleep(time.Millisecond * time.Duration(requestDelay*rateLimit.Cost-int(duration.Milliseconds())))
+			delayMutex.Unlock()
 			goto errHandle
 		}
 		delayMutex.Lock()
 		rateLimit = &ReadmeQuery.RateLimit
-		time.Sleep(time.Millisecond * time.Duration(requestDelay*rateLimit.Cost-int(duration.Milliseconds())))
+		time.Sleep(time.Millisecond * time.Duration(int64(requestDelay*rateLimit.Cost)-duration))
 		delayMutex.Unlock()
 
 		return ReadmeQuery.Repository.Object.Blob.Text
@@ -139,16 +140,17 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 errHandle:
 	start := time.Now()
 	err := githubV4Client.Query(context.Background(), &CVEQuery, variables)
-	duration := time.Since(start)
+	duration := time.Since(start).Milliseconds() - int64(3*time.Millisecond)
 	if err != nil {
+		delayMutex.Lock()
 		rateLimit = &CVEQuery.RateLimit
 		handleGraphQLAPIError(err)
-		time.Sleep(time.Millisecond * time.Duration(requestDelay*rateLimit.Cost-int(duration.Milliseconds())))
+		delayMutex.Unlock()
 		goto errHandle
 	}
 	delayMutex.Lock()
 	rateLimit = &CVEQuery.RateLimit
-	time.Sleep(time.Millisecond * time.Duration(requestDelay*rateLimit.Cost-int(duration.Milliseconds())))
+	time.Sleep(time.Millisecond * time.Duration(int64(requestDelay*rateLimit.Cost)-duration))
 	delayMutex.Unlock()
 
 	maxRepos := CVEQuery.Search.RepositoryCount
@@ -172,12 +174,14 @@ errHandle:
 						delayMutex.Unlock()
 						break
 					} else {
+						if rateLimit.Remaining == 0 {
+							handleGraphQLAPIError(nil)
+							delayMutex.Unlock()
+							continue
+						}
 						untilNextReset := rateLimit.ResetAt.Sub(time.Now()).Milliseconds()
 						if untilNextReset < 0 {
 							untilNextReset = time.Hour.Milliseconds()
-						}
-						if rateLimit.Remaining == 0 {
-							handleGraphQLAPIError(nil)
 						}
 						requestDelay = int(untilNextReset)/rateLimit.Remaining + 1
 					}
@@ -220,16 +224,17 @@ errHandle:
 	for reposCnt < maxRepos {
 		start = time.Now()
 		err = githubV4Client.Query(context.Background(), &CVEQuery, variables)
-		duration = time.Since(start)
+		duration = time.Since(start).Milliseconds() - int64(3*time.Millisecond)
 		if err != nil {
+			delayMutex.Lock()
 			rateLimit = &CVEQuery.RateLimit
 			handleGraphQLAPIError(err)
-			time.Sleep(time.Millisecond * time.Duration(requestDelay*rateLimit.Cost-int(duration.Milliseconds())))
+			delayMutex.Unlock()
 			continue
 		}
 		delayMutex.Lock()
 		rateLimit = &CVEQuery.RateLimit
-		time.Sleep(time.Millisecond * time.Duration(requestDelay*rateLimit.Cost-int(duration.Milliseconds())))
+		time.Sleep(time.Millisecond * time.Duration(int64(requestDelay*rateLimit.Cost)-duration))
 		delayMutex.Unlock()
 
 		if len(CVEQuery.Search.Edges) == 0 {
@@ -263,6 +268,7 @@ func handleGraphQLAPIError(err error) {
 	if err == nil || strings.Contains(err.Error(), "limit exceeded") {
 		untilNextReset := rateLimit.ResetAt.Sub(time.Now())
 		if untilNextReset < time.Minute {
+			rateLimit.ResetAt = time.Now().Add(untilNextReset).Add(time.Hour)
 			time.Sleep(untilNextReset + 3*time.Second)
 			return
 		} else {
