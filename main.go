@@ -71,23 +71,7 @@ var CVEQuery struct {
 		RepositoryCount int
 		PageInfo        struct {
 			EndCursor   githubv4.String
-			StartCursor githubv4.String
-		}
-		Edges []struct {
-			Node struct {
-				Repo Repository `graphql:"... on Repository"`
-			}
-		}
-	} `graphql:"search(query: $query, type: REPOSITORY, first: 100)"`
-}
-
-var CVEPaginationQuery struct {
-	RateLimit RateLimit `graphql:"rateLimit"`
-	Search    struct {
-		RepositoryCount int
-		PageInfo        struct {
-			EndCursor   githubv4.String
-			StartCursor githubv4.String
+			HasNextPage bool
 		}
 		Edges []struct {
 			Node struct {
@@ -122,12 +106,15 @@ func getReadme(repoUrl string) string {
 			"name":  githubv4.String(strings.Trim(urlSplit[len(urlSplit)-1], " ")),
 		}
 
+	errHandle:
 		start := time.Now()
 		err := githubV4Client.Query(context.Background(), &ReadmeQuery, variables)
 		duration := time.Since(start)
 		if err != nil {
 			rateLimit = &ReadmeQuery.RateLimit
 			handleGraphQLAPIError(err)
+			time.Sleep(time.Millisecond * time.Duration(requestDelay*rateLimit.Cost-int(duration.Milliseconds())))
+			goto errHandle
 		}
 		delayMutex.Lock()
 		rateLimit = &ReadmeQuery.RateLimit
@@ -146,14 +133,18 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 		startingDate.Format(time.RFC3339) + ".." + endingDate.Format(time.RFC3339)
 	variables := map[string]interface{}{
 		"query": githubv4.String(query),
+		"after": (*githubv4.String)(nil),
 	}
 
+errHandle:
 	start := time.Now()
 	err := githubV4Client.Query(context.Background(), &CVEQuery, variables)
 	duration := time.Since(start)
 	if err != nil {
 		rateLimit = &CVEQuery.RateLimit
 		handleGraphQLAPIError(err)
+		time.Sleep(time.Millisecond * time.Duration(requestDelay*rateLimit.Cost-int(duration.Milliseconds())))
+		goto errHandle
 	}
 	delayMutex.Lock()
 	rateLimit = &CVEQuery.RateLimit
@@ -186,9 +177,7 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 							untilNextReset = time.Hour.Milliseconds()
 						}
 						if rateLimit.Remaining == 0 {
-							writeOutput(outputFile, silent)
-							fmt.Println("Rate limit exceeded!\nNext reset at " + rateLimit.ResetAt.Format(time.RFC1123))
-							os.Exit(0)
+							handleGraphQLAPIError(nil)
 						}
 						requestDelay = int(untilNextReset)/rateLimit.Remaining + 1
 					}
@@ -226,25 +215,27 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 
 	variables = map[string]interface{}{
 		"query": githubv4.String(query),
-		"after": CVEQuery.Search.PageInfo.EndCursor,
+		"after": githubv4.NewString(CVEQuery.Search.PageInfo.EndCursor),
 	}
 	for reposCnt < maxRepos {
 		start = time.Now()
-		err = githubV4Client.Query(context.Background(), &CVEPaginationQuery, variables)
+		err = githubV4Client.Query(context.Background(), &CVEQuery, variables)
 		duration = time.Since(start)
 		if err != nil {
-			rateLimit = &CVEPaginationQuery.RateLimit
+			rateLimit = &CVEQuery.RateLimit
 			handleGraphQLAPIError(err)
+			time.Sleep(time.Millisecond * time.Duration(requestDelay*rateLimit.Cost-int(duration.Milliseconds())))
+			continue
 		}
 		delayMutex.Lock()
-		rateLimit = &CVEPaginationQuery.RateLimit
+		rateLimit = &CVEQuery.RateLimit
 		time.Sleep(time.Millisecond * time.Duration(requestDelay*rateLimit.Cost-int(duration.Milliseconds())))
 		delayMutex.Unlock()
 
-		if len(CVEPaginationQuery.Search.Edges) == 0 {
+		if len(CVEQuery.Search.Edges) == 0 {
 			break
 		}
-		for _, nodeStruct := range CVEPaginationQuery.Search.Edges {
+		for _, nodeStruct := range CVEQuery.Search.Edges {
 			if nodeStruct.Node.Repo.IsEmpty {
 				continue
 			}
@@ -264,17 +255,27 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 			_ = bar.Add(1)
 		}
 
-		variables["after"] = CVEPaginationQuery.Search.PageInfo.EndCursor
+		variables["after"] = githubv4.NewString(CVEQuery.Search.PageInfo.EndCursor)
 	}
 }
 
 func handleGraphQLAPIError(err error) {
+	if err == nil || strings.Contains(err.Error(), "limit exceeded") {
+		untilNextReset := rateLimit.ResetAt.Sub(time.Now())
+		if untilNextReset < time.Minute {
+			time.Sleep(untilNextReset + 3*time.Second)
+			return
+		} else {
+			processResults()
+			writeOutput(outputFile, silent)
+			fmt.Println("\n" + err.Error())
+			fmt.Println("Next reset at " + rateLimit.ResetAt.Format(time.RFC1123))
+			os.Exit(0)
+		}
+	}
 	processResults()
 	writeOutput(outputFile, silent)
-	fmt.Println(err)
-	if strings.Contains(err.Error(), "limit exceeded") {
-		fmt.Println("Next reset at " + rateLimit.ResetAt.Format(time.RFC1123))
-	}
+	fmt.Println("\n" + err.Error())
 	os.Exit(0)
 }
 
@@ -302,9 +303,6 @@ func writeOutput(fileName string, silent bool) {
 }
 
 func processResults() {
-	if len(reposResults) == 0 {
-		return
-	}
 	re := regexp.MustCompile(CVERegex)
 
 	for i, repo := range reposResults {
