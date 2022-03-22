@@ -122,14 +122,16 @@ func getReadme(repoUrl string) string {
 			"name":  githubv4.String(strings.Trim(urlSplit[len(urlSplit)-1], " ")),
 		}
 
+		start := time.Now()
 		err := githubV4Client.Query(context.Background(), &ReadmeQuery, variables)
+		duration := time.Since(start)
 		if err != nil {
 			rateLimit = &ReadmeQuery.RateLimit
 			handleGraphQLAPIError(err)
 		}
 		delayMutex.Lock()
 		rateLimit = &ReadmeQuery.RateLimit
-		time.Sleep(time.Millisecond * time.Duration(requestDelay*rateLimit.Cost))
+		time.Sleep(time.Millisecond * time.Duration(requestDelay*rateLimit.Cost-int(duration.Milliseconds())))
 		delayMutex.Unlock()
 
 		return ReadmeQuery.Repository.Object.Blob.Text
@@ -146,14 +148,16 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 		"query": githubv4.String(query),
 	}
 
+	start := time.Now()
 	err := githubV4Client.Query(context.Background(), &CVEQuery, variables)
+	duration := time.Since(start)
 	if err != nil {
 		rateLimit = &CVEQuery.RateLimit
 		handleGraphQLAPIError(err)
 	}
 	delayMutex.Lock()
 	rateLimit = &CVEQuery.RateLimit
-	time.Sleep(time.Millisecond * time.Duration(requestDelay*rateLimit.Cost))
+	time.Sleep(time.Millisecond * time.Duration(requestDelay*rateLimit.Cost-int(duration.Milliseconds())))
 	delayMutex.Unlock()
 
 	maxRepos := CVEQuery.Search.RepositoryCount
@@ -225,14 +229,16 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 		"after": CVEQuery.Search.PageInfo.EndCursor,
 	}
 	for reposCnt < maxRepos {
+		start = time.Now()
 		err = githubV4Client.Query(context.Background(), &CVEPaginationQuery, variables)
+		duration = time.Since(start)
 		if err != nil {
 			rateLimit = &CVEPaginationQuery.RateLimit
 			handleGraphQLAPIError(err)
 		}
 		delayMutex.Lock()
 		rateLimit = &CVEPaginationQuery.RateLimit
-		time.Sleep(time.Millisecond * time.Duration(requestDelay*rateLimit.Cost))
+		time.Sleep(time.Millisecond * time.Duration(requestDelay*rateLimit.Cost-int(duration.Milliseconds())))
 		delayMutex.Unlock()
 
 		if len(CVEPaginationQuery.Search.Edges) == 0 {
