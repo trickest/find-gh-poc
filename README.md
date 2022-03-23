@@ -12,7 +12,7 @@ go install -v github.com/trickest/find-gh-poc@latest
 
 ### Docker
 ```
-docker pull trickest/find-gh-poc
+docker pull quay.io/trickest/find-gh-poc
 ```
 
 ## Command line options
