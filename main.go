@@ -109,7 +109,7 @@ func getReadme(repoUrl string) string {
 	errHandle:
 		start := time.Now()
 		err := githubV4Client.Query(context.Background(), &ReadmeQuery, variables)
-		duration := time.Since(start).Milliseconds() - int64(3*time.Millisecond)
+		duration := time.Since(start).Milliseconds() - int64(time.Millisecond)
 		if err != nil {
 			delayMutex.Lock()
 			rateLimit = &ReadmeQuery.RateLimit
@@ -119,7 +119,7 @@ func getReadme(repoUrl string) string {
 		}
 		delayMutex.Lock()
 		rateLimit = &ReadmeQuery.RateLimit
-		time.Sleep(time.Duration(int64(requestDelay*rateLimit.Cost) - duration))
+		time.Sleep(time.Duration(int64(requestDelay*rateLimit.Cost)*int64(time.Millisecond) - duration))
 		delayMutex.Unlock()
 
 		return ReadmeQuery.Repository.Object.Blob.Text
@@ -140,7 +140,7 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 errHandle:
 	start := time.Now()
 	err := githubV4Client.Query(context.Background(), &CVEQuery, variables)
-	duration := time.Since(start).Milliseconds() - int64(3*time.Millisecond)
+	duration := time.Since(start).Milliseconds() - int64(time.Millisecond)
 	if err != nil {
 		delayMutex.Lock()
 		rateLimit = &CVEQuery.RateLimit
@@ -150,7 +150,7 @@ errHandle:
 	}
 	delayMutex.Lock()
 	rateLimit = &CVEQuery.RateLimit
-	time.Sleep(time.Duration(int64(requestDelay*rateLimit.Cost) - duration))
+	time.Sleep(time.Duration(int64(requestDelay*rateLimit.Cost)*int64(time.Millisecond) - duration))
 	delayMutex.Unlock()
 
 	maxRepos := CVEQuery.Search.RepositoryCount
@@ -224,7 +224,7 @@ errHandle:
 	for reposCnt < maxRepos {
 		start = time.Now()
 		err = githubV4Client.Query(context.Background(), &CVEQuery, variables)
-		duration = time.Since(start).Milliseconds() - int64(3*time.Millisecond)
+		duration = time.Since(start).Milliseconds() - int64(time.Millisecond)
 		if err != nil {
 			delayMutex.Lock()
 			rateLimit = &CVEQuery.RateLimit
@@ -234,7 +234,7 @@ errHandle:
 		}
 		delayMutex.Lock()
 		rateLimit = &CVEQuery.RateLimit
-		time.Sleep(time.Duration(int64(requestDelay*rateLimit.Cost) - duration))
+		time.Sleep(time.Duration(int64(requestDelay*rateLimit.Cost)*int64(time.Millisecond) - duration))
 		delayMutex.Unlock()
 
 		if len(CVEQuery.Search.Edges) == 0 {
