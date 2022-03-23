@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"regexp"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -25,14 +26,11 @@ const (
 	CVERegex = "(?i)cve[-–_][0-9]{4}[-–_][0-9]{4,}"
 )
 
-var ReadmeQuery struct {
-	Repository struct {
-		Object struct {
-			Blob struct {
-				Text string
-			} `graphql:"... on Blob"`
-		} `graphql:"object(expression: \"HEAD:README.md\")"`
-	} `graphql:"repository(owner: $owner, name: $name)"`
+type RateLimit struct {
+	Limit     int
+	Remaining int
+	Cost      int
+	ResetAt   time.Time
 }
 
 type Repository struct {
@@ -56,27 +54,24 @@ type RepositoryResult struct {
 	Readme      *string  `json:"readme,omitempty"`
 }
 
-var CVEQuery struct {
-	Search struct {
-		RepositoryCount int
-		PageInfo        struct {
-			EndCursor   githubv4.String
-			StartCursor githubv4.String
-		}
-		Edges []struct {
-			Node struct {
-				Repo Repository `graphql:"... on Repository"`
-			}
-		}
-	} `graphql:"search(query: $query, type: REPOSITORY, first: 100)"`
+var ReadmeQuery struct {
+	RateLimit  RateLimit `graphql:"rateLimit"`
+	Repository struct {
+		Object struct {
+			Blob struct {
+				Text string
+			} `graphql:"... on Blob"`
+		} `graphql:"object(expression: \"HEAD:README.md\")"`
+	} `graphql:"repository(owner: $owner, name: $name)"`
 }
 
-var CVEPaginationQuery struct {
-	Search struct {
+var CVEQuery struct {
+	RateLimit RateLimit `graphql:"rateLimit"`
+	Search    struct {
 		RepositoryCount int
 		PageInfo        struct {
 			EndCursor   githubv4.String
-			StartCursor githubv4.String
+			HasNextPage bool
 		}
 		Edges []struct {
 			Node struct {
@@ -94,6 +89,12 @@ var (
 	githubCreateDate = time.Date(2008, 2, 8, 0, 0, 0, 0, time.UTC)
 	bar              = &progressbar.ProgressBar{}
 	barInitialized   = false
+	requestDelay     int
+	adjustDelay      bool
+	rateLimit        *RateLimit
+	delayMutex       = &sync.Mutex{}
+	outputFile       string
+	silent           bool
 )
 
 func getReadme(repoUrl string) string {
@@ -105,11 +106,22 @@ func getReadme(repoUrl string) string {
 			"name":  githubv4.String(strings.Trim(urlSplit[len(urlSplit)-1], " ")),
 		}
 
+	errHandle:
+		start := time.Now()
 		err := githubV4Client.Query(context.Background(), &ReadmeQuery, variables)
+		duration := time.Since(start).Milliseconds() - int64(time.Millisecond)
 		if err != nil {
-			fmt.Println(err)
-			return ""
+			delayMutex.Lock()
+			rateLimit = &ReadmeQuery.RateLimit
+			handleGraphQLAPIError(err)
+			delayMutex.Unlock()
+			goto errHandle
 		}
+		delayMutex.Lock()
+		rateLimit = &ReadmeQuery.RateLimit
+		time.Sleep(time.Duration(int64(requestDelay*rateLimit.Cost)*int64(time.Millisecond) - duration))
+		delayMutex.Unlock()
+
 		return ReadmeQuery.Repository.Object.Blob.Text
 	} else {
 		return ""
@@ -122,13 +134,24 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 		startingDate.Format(time.RFC3339) + ".." + endingDate.Format(time.RFC3339)
 	variables := map[string]interface{}{
 		"query": githubv4.String(query),
+		"after": (*githubv4.String)(nil),
 	}
 
+errHandle:
+	start := time.Now()
 	err := githubV4Client.Query(context.Background(), &CVEQuery, variables)
+	duration := time.Since(start).Milliseconds() - int64(time.Millisecond)
 	if err != nil {
-		fmt.Println(err)
-		return
+		delayMutex.Lock()
+		rateLimit = &CVEQuery.RateLimit
+		handleGraphQLAPIError(err)
+		delayMutex.Unlock()
+		goto errHandle
 	}
+	delayMutex.Lock()
+	rateLimit = &CVEQuery.RateLimit
+	time.Sleep(time.Duration(int64(requestDelay*rateLimit.Cost)*int64(time.Millisecond) - duration))
+	delayMutex.Unlock()
 
 	maxRepos := CVEQuery.Search.RepositoryCount
 	if !barInitialized {
@@ -140,6 +163,32 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 			progressbar.OptionOnCompletion(func() { fmt.Println() }),
 		)
 		barInitialized = true
+		if adjustDelay {
+			go func() {
+				for {
+					delayMutex.Lock()
+					remainingRepos := bar.GetMax() - len(reposResults)
+					remainingRequests := remainingRepos + remainingRepos/100 + 1
+					if remainingRequests < rateLimit.Remaining {
+						requestDelay = 0
+						delayMutex.Unlock()
+						break
+					} else {
+						if rateLimit.Remaining == 0 {
+							handleGraphQLAPIError(nil)
+							delayMutex.Unlock()
+							continue
+						}
+						untilNextReset := rateLimit.ResetAt.Sub(time.Now()).Milliseconds()
+						if untilNextReset < 0 {
+							untilNextReset = time.Hour.Milliseconds()
+						}
+						requestDelay = int(untilNextReset)/rateLimit.Remaining + 1
+					}
+					delayMutex.Unlock()
+				}
+			}()
+		}
 	}
 	if maxRepos >= 1000 {
 		dateDif := endingDate.Sub(startingDate) / 2
@@ -170,20 +219,28 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 
 	variables = map[string]interface{}{
 		"query": githubv4.String(query),
-		"after": CVEQuery.Search.PageInfo.EndCursor,
+		"after": githubv4.NewString(CVEQuery.Search.PageInfo.EndCursor),
 	}
 	for reposCnt < maxRepos {
-		time.Sleep(time.Second)
-
-		err = githubV4Client.Query(context.Background(), &CVEPaginationQuery, variables)
+		start = time.Now()
+		err = githubV4Client.Query(context.Background(), &CVEQuery, variables)
+		duration = time.Since(start).Milliseconds() - int64(time.Millisecond)
 		if err != nil {
-			fmt.Println(err)
+			delayMutex.Lock()
+			rateLimit = &CVEQuery.RateLimit
+			handleGraphQLAPIError(err)
+			delayMutex.Unlock()
+			continue
 		}
+		delayMutex.Lock()
+		rateLimit = &CVEQuery.RateLimit
+		time.Sleep(time.Duration(int64(requestDelay*rateLimit.Cost)*int64(time.Millisecond) - duration))
+		delayMutex.Unlock()
 
-		if len(CVEPaginationQuery.Search.Edges) == 0 {
+		if len(CVEQuery.Search.Edges) == 0 {
 			break
 		}
-		for _, nodeStruct := range CVEPaginationQuery.Search.Edges {
+		for _, nodeStruct := range CVEQuery.Search.Edges {
 			if nodeStruct.Node.Repo.IsEmpty {
 				continue
 			}
@@ -203,7 +260,87 @@ func getRepos(query string, startingDate time.Time, endingDate time.Time) {
 			_ = bar.Add(1)
 		}
 
-		variables["after"] = CVEPaginationQuery.Search.PageInfo.EndCursor
+		variables["after"] = githubv4.NewString(CVEQuery.Search.PageInfo.EndCursor)
+	}
+}
+
+func handleGraphQLAPIError(err error) {
+	if err == nil || strings.Contains(err.Error(), "limit exceeded") {
+		untilNextReset := rateLimit.ResetAt.Sub(time.Now())
+		if untilNextReset < time.Minute {
+			rateLimit.ResetAt = time.Now().Add(untilNextReset).Add(time.Hour)
+			time.Sleep(untilNextReset + 3*time.Second)
+			return
+		} else {
+			processResults()
+			writeOutput(outputFile, silent)
+			fmt.Println("\n" + err.Error())
+			fmt.Println("Next reset at " + rateLimit.ResetAt.Format(time.RFC1123))
+			os.Exit(0)
+		}
+	}
+	processResults()
+	writeOutput(outputFile, silent)
+	fmt.Println("\n" + err.Error())
+	os.Exit(0)
+}
+
+func writeOutput(fileName string, silent bool) {
+	if len(reposResults) == 0 {
+		return
+	}
+	output, err := os.Create(fileName)
+	if err != nil {
+		fmt.Println(err)
+		fmt.Println("Couldn't create output file")
+	}
+	defer output.Close()
+
+	for id, repoURLs := range reposPerCVE {
+		for _, r := range repoURLs {
+			_, _ = io.WriteString(output, id+" - "+r+"\n")
+		}
+	}
+
+	if !silent {
+		data, _ := json.MarshalIndent(reposResults, "", "   ")
+		fmt.Println(string(data))
+	}
+}
+
+func processResults() {
+	re := regexp.MustCompile(CVERegex)
+
+	for i, repo := range reposResults {
+		ids := make(map[string]bool, 0)
+
+		matches := re.FindAllStringSubmatch(repo.Url, -1)
+		matches = append(matches, re.FindAllStringSubmatch(repo.Description, -1)...)
+		matches = append(matches, re.FindAllStringSubmatch(*repo.Readme, -1)...)
+		for _, topic := range repo.Topics {
+			matches = append(matches, re.FindAllStringSubmatch(topic, -1)...)
+		}
+
+		for _, m := range matches {
+			if m != nil && len(m) > 0 {
+				if m[0] != "" {
+					m[0] = strings.ToUpper(m[0])
+					m[0] = strings.ReplaceAll(m[0], "_", "-")
+					ids[strings.ReplaceAll(m[0], "–", "-")] = true
+				}
+			}
+		}
+
+		if len(ids) > 0 {
+			reposResults[i].CVEIDs = make([]string, 0)
+			for id := range ids {
+				reposResults[i].CVEIDs = append(reposResults[i].CVEIDs, id)
+				reposPerCVE[id] = append(reposPerCVE[id], repo.Url)
+			}
+		}
+
+		reposResults[i].Readme = nil
+		reposResults[i].Topics = nil
 	}
 }
 
@@ -212,8 +349,10 @@ func main() {
 	tokenFile := flag.String("token-file", "", "File to read Github token from")
 	query := flag.String("query-string", "", "GraphQL search query")
 	queryFile := flag.String("query-file", "", "File to read GraphQL search query from")
-	outputFile := flag.String("o", "", "Output file name")
-	silent := flag.Bool("silent", false, "Don't print JSON output to stdout")
+	flag.StringVar(&outputFile, "o", "", "Output file name")
+	flag.BoolVar(&silent, "silent", false, "Don't print JSON output to stdout")
+	flag.IntVar(&requestDelay, "delay", 0, "Time delay after every GraphQL request [ms]")
+	flag.BoolVar(&adjustDelay, "adjust-delay", false, "Automatically adjust time delay between requests")
 	flag.Parse()
 
 	go func() {
@@ -225,7 +364,7 @@ func main() {
 		os.Exit(0)
 	}()
 
-	if (*token == "" && *tokenFile == "") || *outputFile == "" {
+	if (*token == "" && *tokenFile == "") || outputFile == "" {
 		fmt.Println("Token and output file must be specified!")
 		os.Exit(1)
 	}
@@ -283,56 +422,7 @@ func main() {
 	searchQuery += " in:readme in:description in:name"
 	getRepos(searchQuery, githubCreateDate, time.Now().UTC())
 
-	if len(reposResults) > 0 {
-		re := regexp.MustCompile(CVERegex)
+	processResults()
+	writeOutput(outputFile, silent)
 
-		for i, repo := range reposResults {
-			ids := make(map[string]bool, 0)
-
-			matches := re.FindAllStringSubmatch(repo.Url, -1)
-			matches = append(matches, re.FindAllStringSubmatch(repo.Description, -1)...)
-			matches = append(matches, re.FindAllStringSubmatch(*repo.Readme, -1)...)
-			for _, topic := range repo.Topics {
-				matches = append(matches, re.FindAllStringSubmatch(topic, -1)...)
-			}
-
-			for _, m := range matches {
-				if m != nil && len(m) > 0 {
-					if m[0] != "" {
-						m[0] = strings.ToUpper(m[0])
-						m[0] = strings.ReplaceAll(m[0], "_", "-")
-						ids[strings.ReplaceAll(m[0], "–", "-")] = true
-					}
-				}
-			}
-
-			if len(ids) > 0 {
-				reposResults[i].CVEIDs = make([]string, 0)
-				for id := range ids {
-					reposResults[i].CVEIDs = append(reposResults[i].CVEIDs, id)
-					reposPerCVE[id] = append(reposPerCVE[id], repo.Url)
-				}
-			}
-
-			reposResults[i].Readme = nil
-			reposResults[i].Topics = nil
-		}
-
-		output, err := os.Create(*outputFile)
-		if err != nil {
-			fmt.Println("Couldn't create output file")
-		}
-		defer output.Close()
-
-		for id, repoURLs := range reposPerCVE {
-			for _, r := range repoURLs {
-				_, _ = io.WriteString(output, id+" - "+r+"\n")
-			}
-		}
-
-		if !*silent {
-			data, _ := json.MarshalIndent(reposResults, "", "   ")
-			fmt.Println(string(data))
-		}
-	}
 }
