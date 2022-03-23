@@ -1,4 +1,4 @@
-module github-cve
+module find-gh-poc
 
 go 1.17
 
