@@ -1,5 +1,5 @@
 # Find-gh-poc
-The centerpiece of the [trickest/cve](https://github.com/trickest/cve) project; finds CVE POCs in Github. 
+The centerpiece of the [trickest/cve](https://github.com/trickest/cve) project; finds CVE PoCs on Github. 
 ## Installation
 ### From binary
 Download a prebuilt binary from the [releases page](https://github.com/trickest/find-gh-poc/releases/latest) and unzip it.
