@@ -21,6 +21,10 @@ docker pull trickest/find-gh-poc
     	GraphQL search query
   -query-file string
     	File to read GraphQL search query from
+  -adjust-delay
+    	Automatically adjust time delay between requests
+  -delay int
+    	Time delay after every GraphQL request [ms]
   -silent
     	Don't print JSON output to stdout
   -token-string string
