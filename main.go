@@ -119,7 +119,7 @@ func getReadme(repoUrl string) string {
 		}
 		delayMutex.Lock()
 		rateLimit = &ReadmeQuery.RateLimit
-		time.Sleep(time.Millisecond * time.Duration(int64(requestDelay*rateLimit.Cost)-duration))
+		time.Sleep(time.Duration(int64(requestDelay*rateLimit.Cost) - duration))
 		delayMutex.Unlock()
 
 		return ReadmeQuery.Repository.Object.Blob.Text
@@ -150,7 +150,7 @@ errHandle:
 	}
 	delayMutex.Lock()
 	rateLimit = &CVEQuery.RateLimit
-	time.Sleep(time.Millisecond * time.Duration(int64(requestDelay*rateLimit.Cost)-duration))
+	time.Sleep(time.Duration(int64(requestDelay*rateLimit.Cost) - duration))
 	delayMutex.Unlock()
 
 	maxRepos := CVEQuery.Search.RepositoryCount
@@ -234,7 +234,7 @@ errHandle:
 		}
 		delayMutex.Lock()
 		rateLimit = &CVEQuery.RateLimit
-		time.Sleep(time.Millisecond * time.Duration(int64(requestDelay*rateLimit.Cost)-duration))
+		time.Sleep(time.Duration(int64(requestDelay*rateLimit.Cost) - duration))
 		delayMutex.Unlock()
 
 		if len(CVEQuery.Search.Edges) == 0 {
